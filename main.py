@@ -98,13 +98,13 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id == config.ADMIN_TELEGRAM_ID:
         await update.message.reply_text(
             "🔧 *Admin Commands:*\n\n"
-            "/reply U001 <message> — User ko reply karo\n"
+            "/reply U001 \<message\> — User ko reply karo\n"
             "/block U001 — User ko block karo\n"
             "/unblock U001 — User ko unblock karo\n"
             "/blocked — Blocked users ki list\n"
             "/users — Sare users ki list\n"
             "/help — Yeh message",
-            parse_mode=ParseMode.MARKDOWN,
+            parse_mode=ParseMode.MARKDOWN_V2,
         )
     else:
         await update.message.reply_text(
@@ -278,41 +278,142 @@ async def user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ Message bhejne mein error aa gayi. Dobara try karo.")
 
 
-# ── Admin: /reply U001 <message> ─────────────────────────────────────────────
+# ── Admin: /reply — inline user picker OR direct /reply U001 msg ─────────────
 async def reply_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != config.ADMIN_TELEGRAM_ID:
         return
 
-    if len(context.args) < 2:
+    # ── Case 1: /reply U001 <message> — direct, existing flow ────────────────
+    if len(context.args) >= 2:
+        internal_id = context.args[0].upper()
+        reply_text  = " ".join(context.args[1:])
+
+        user_data = await db.get_user_by_internal_id(internal_id)
+        if not user_data:
+            await update.message.reply_text(
+                f"❌ User `{internal_id}` nahi mila.", parse_mode=ParseMode.MARKDOWN
+            )
+            return
+
+        await _show_reply_confirm(update, context, internal_id,
+                                  user_data["telegram_id"],
+                                  user_data["username"], reply_text)
+        return
+
+    # ── Case 2: /reply alone — show inline user picker ────────────────────────
+    recent = await db.get_recent_users(limit=6)
+
+    if not recent:
         await update.message.reply_text(
-            "❌ Sahi format: `/reply U001 <message>`", parse_mode=ParseMode.MARKDOWN
+            "Abhi tak kisi ne message nahi kiya. Koi user nahi mila."
         )
         return
 
-    internal_id = context.args[0].upper()
-    reply_text = " ".join(context.args[1:])
+    # Build 2-column grid of buttons
+    buttons = []
+    row = []
+    for u in recent:
+        label = f"👤 @{u['username']}" if u["username"] else f"👤 {u['internal_id']}"
+        label += f"  ({u['internal_id']})"
+        row.append(InlineKeyboardButton(label, callback_data=f"select_user:{u['internal_id']}"))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
 
-    user_data = await db.get_user_by_internal_id(internal_id)
-    if not user_data:
-        await update.message.reply_text(
-            f"❌ User `{internal_id}` nahi mila.", parse_mode=ParseMode.MARKDOWN
-        )
-        return
+    await update.message.reply_text(
+        "👥 *Kise reply karna hai?*\nNeeche se user chunein:",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
 
-    confirm_msg = await update.message.reply_text(
-        f"📤 *Reply preview — {internal_id}:*\n`{reply_text}`\n\n*Bhejein?*",
+
+# ── Helper: show confirm keyboard for admin reply ─────────────────────────────
+async def _show_reply_confirm(
+    update_or_query,
+    context: ContextTypes.DEFAULT_TYPE,
+    internal_id: str,
+    telegram_id: int,
+    username,
+    reply_text: str,
+):
+    uname = f"@{username}" if username else "[No Username]"
+    text  = (
+        f"📤 *Reply preview*\n"
+        f"👤 {internal_id} — {uname}\n"
+        f"{'━' * 26}\n"
+        f"{reply_text}\n"
+        f"{'━' * 26}\n"
+        f"*Bhejein?*"
+    )
+
+    # Works for both Message (from /reply cmd) and CallbackQuery (from inline pick)
+    if hasattr(update_or_query, "message"):
+        send_fn = update_or_query.message.reply_text
+    else:
+        send_fn = update_or_query.message.reply_text
+
+    confirm_msg = await send_fn(
+        text,
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=_confirm_keyboard("admin", 0),
     )
-
     pending_admin_replies[confirm_msg.message_id] = {
         "internal_id": internal_id,
-        "telegram_id": user_data["telegram_id"],
-        "reply_text": reply_text,
+        "telegram_id": telegram_id,
+        "reply_text":  reply_text,
     }
-
     await confirm_msg.edit_reply_markup(
         reply_markup=_confirm_keyboard("admin", confirm_msg.message_id)
+    )
+
+
+# ── Callback: admin picks a user from inline picker ───────────────────────────
+async def select_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if update.effective_user.id != config.ADMIN_TELEGRAM_ID:
+        await query.answer("Sirf admin use kar sakta hai.", show_alert=True)
+        return
+
+    await query.answer()
+    internal_id = query.data.split(":", 1)[1].upper()
+
+    user_data = await db.get_user_by_internal_id(internal_id)
+    if not user_data:
+        await query.edit_message_text(f"❌ User {internal_id} nahi mila.")
+        return
+
+    # Store state — next admin message will be treated as the reply text
+    context.user_data["awaiting_reply"] = {
+        "internal_id": internal_id,
+        "telegram_id": user_data["telegram_id"],
+        "username":    user_data["username"],
+    }
+
+    uname = f"@{user_data['username']}" if user_data["username"] else "[No Username]"
+    await query.edit_message_text(
+        f"✏️ *{internal_id} ({uname}) ko reply karo*\n\nAb apna reply message type karo:",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+
+# ── Admin message handler — captures reply text after user picker ─────────────
+async def handle_admin_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Runs only for admin's non-command text messages."""
+    state = context.user_data.get("awaiting_reply")
+    if not state:
+        return  # no active reply flow — ignore
+
+    reply_text = update.message.text
+    context.user_data.pop("awaiting_reply", None)
+
+    await _show_reply_confirm(
+        update, context,
+        state["internal_id"],
+        state["telegram_id"],
+        state["username"],
+        reply_text,
     )
 
 
@@ -469,8 +570,15 @@ def main():
     app.add_handler(CommandHandler("users",   users_command))
 
     # Inline button callbacks
-    app.add_handler(CallbackQueryHandler(user_callback,  pattern=r"^user_(confirm|cancel):"))
-    app.add_handler(CallbackQueryHandler(admin_callback, pattern=r"^admin_(confirm|cancel):"))
+    app.add_handler(CallbackQueryHandler(user_callback,        pattern=r"^user_(confirm|cancel):"))
+    app.add_handler(CallbackQueryHandler(admin_callback,       pattern=r"^admin_(confirm|cancel):"))
+    app.add_handler(CallbackQueryHandler(select_user_callback, pattern=r"^select_user:"))
+
+    # Admin text messages — captures reply text after user picker
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & filters.User(config.ADMIN_TELEGRAM_ID),
+        handle_admin_message,
+    ))
 
     # All non-command messages from non-admin users
     app.add_handler(MessageHandler(
