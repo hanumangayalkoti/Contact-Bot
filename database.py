@@ -38,7 +38,9 @@ async def init_db(db_pool: asyncpg.Pool):
 
 
 async def get_or_create_user(telegram_id: int, username: str = None) -> dict:
-    """Fetch existing user or create a new one with auto internal_id (U001, U002…)."""
+    """Fetch existing user or create a new one.
+    internal_id = T<telegram_id> — always unique, no race condition.
+    """
     async with pool.acquire() as conn:
         user = await conn.fetchrow(
             "SELECT * FROM users WHERE telegram_id = $1", telegram_id
@@ -51,14 +53,17 @@ async def get_or_create_user(telegram_id: int, username: str = None) -> dict:
                     "UPDATE users SET username = $1 WHERE telegram_id = $2",
                     username, telegram_id
                 )
+                # Return updated dict with new username (not stale)
+                return {**dict(user), "username": username}
             return dict(user)
 
-        # Assign next internal ID
-        count = await conn.fetchval("SELECT COUNT(*) FROM users")
-        internal_id = f"U{str(count + 1).zfill(3)}"
+        # Use Telegram ID as internal_id — already globally unique, no race condition
+        internal_id = f"T{telegram_id}"
 
         await conn.execute(
-            "INSERT INTO users (telegram_id, username, internal_id) VALUES ($1, $2, $3)",
+            """INSERT INTO users (telegram_id, username, internal_id)
+               VALUES ($1, $2, $3)
+               ON CONFLICT (telegram_id) DO NOTHING""",
             telegram_id, username, internal_id
         )
         row = await conn.fetchrow(
