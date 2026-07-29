@@ -438,12 +438,17 @@ async def post_init(application: Application):
     # Default (all users)
     await application.bot.set_my_commands(user_commands, scope=BotCommandScopeDefault())
 
-    # Admin-only (in admin's private chat with bot)
-    await application.bot.set_my_commands(
-        admin_commands,
-        scope=BotCommandScopeChat(chat_id=config.ADMIN_TELEGRAM_ID),
-    )
-    logger.info("✅ Bot commands registered.")
+    # Admin-only — only works if admin has already started the bot once
+    try:
+        await application.bot.set_my_commands(
+            admin_commands,
+            scope=BotCommandScopeChat(chat_id=config.ADMIN_TELEGRAM_ID),
+        )
+        logger.info("✅ Bot commands registered (including admin scope).")
+    except Exception:
+        # Admin hasn't opened the bot yet — commands will register on next restart
+        logger.warning("⚠️ Admin-scope commands skipped (admin hasn't started the bot yet). "
+                       "Re-deploy once after sending /start to the bot.")
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
