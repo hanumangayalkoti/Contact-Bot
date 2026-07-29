@@ -111,6 +111,23 @@ async def get_all_users():
         return await conn.fetch("SELECT * FROM users ORDER BY id")
 
 
+async def get_recent_users(limit: int = 6):
+    """Last N users who messaged (unblocked), most recent first."""
+    async with pool.acquire() as conn:
+        return await conn.fetch(
+            """SELECT u.* FROM users u
+               INNER JOIN (
+                   SELECT user_internal_id, MAX(created_at) AS last_msg
+                   FROM messages WHERE direction = 'in'
+                   GROUP BY user_internal_id
+               ) m ON u.internal_id = m.user_internal_id
+               WHERE u.is_blocked = FALSE
+               ORDER BY m.last_msg DESC
+               LIMIT $1""",
+            limit,
+        )
+
+
 async def save_message(
     user_internal_id: str,
     content: str = None,
