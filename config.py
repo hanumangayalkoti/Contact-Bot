@@ -22,3 +22,4 @@ if not ADMIN_TELEGRAM_ID:
     raise ValueError("ADMIN_TELEGRAM_ID environment variable is not set!")
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL environment variable is not set!")
+    
