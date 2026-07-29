@@ -98,12 +98,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id == config.ADMIN_TELEGRAM_ID:
         await update.message.reply_text(
             "🔧 *Admin Commands:*\n\n"
-            "`/reply U001 <message>` — User ko reply karo\n"
-            "`/block U001` — User ko block karo\n"
-            "`/unblock U001` — User ko unblock karo\n"
-            "`/blocked` — Blocked users ki list\n"
-            "`/users` — Sare users ki list\n"
-            "`/help` — Yeh message",
+            "/reply U001 <message> — User ko reply karo\n"
+            "/block U001 — User ko block karo\n"
+            "/unblock U001 — User ko unblock karo\n"
+            "/blocked — Blocked users ki list\n"
+            "/users — Sare users ki list\n"
+            "/help — Yeh message",
             parse_mode=ParseMode.MARKDOWN,
         )
     else:
